@@ -1,0 +1,20 @@
+# 1. Imports standards Python
+from typing import List, Dict, Any
+from datetime import datetime
+import json
+import asyncio
+
+# 2. Imports de bibliothèques tierces
+import openai
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from serpapi import SerpApiClient
+from pinterest import Pinterest
+from sqlalchemy.ext.asyncio import AsyncSession
+import pandas as pd
+import numpy as np
+
+# 3. Imports relatifs au projet
+from ..config import settings
+from ..database.models import Website, SEOData, Keyword, AgentMemory
+from ..utils.analytics import AnalyticsProcessor 

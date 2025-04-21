@@ -1,0 +1,188 @@
+from typing import Dict, Any, List
+from sqlalchemy.ext.asyncio import AsyncSession
+from ..database.models import Website
+import aiohttp
+from googleapiclient.discovery import build
+from serpapi import GoogleSearch
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class SEOAgent:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+        self.gtmetrix_api_key = os.getenv('KEY_GTMETRIX')
+        self.pagespeed_api_key = os.getenv('KEY_PAGESPEED')
+        self.serpapi_key = os.getenv('KEY_SERPAPI')
+        self.youtube = build('youtube', 'v3', developerKey=os.getenv('KEY_YOUTUBE'))
+
+    async def analyze_website(self, url: str) -> Dict[str, Any]:
+        """Analyse principale d'un site web"""
+        try:
+            # Analyse technique
+            technical_data = await self._perform_technical_analysis(url)
+            
+            # Analyse des mots-clés
+            keyword_data = await self._analyze_keywords(url)
+            
+            # Analyse de la concurrence
+            competition_data = await self._analyze_competition(url, keyword_data)
+            
+            # Analyse du contenu YouTube
+            youtube_data = await self._analyze_youtube_content(url)
+            
+            return {
+                "technical_analysis": technical_data,
+                "keyword_analysis": keyword_data,
+                "competition_analysis": competition_data,
+                "youtube_analysis": youtube_data
+            }
+        except Exception as e:
+            print(f"Erreur lors de l'analyse : {e}")
+            return {
+                "error": str(e),
+                "status": "failed"
+            }
+
+    async def _perform_technical_analysis(self, url: str) -> Dict[str, Any]:
+        """Analyse technique du site"""
+        try:
+            # Analyse GTmetrix
+            gtmetrix_data = await self._analyze_with_gtmetrix(url)
+            
+            # Analyse PageSpeed
+            pagespeed_data = await self._analyze_with_pagespeed(url)
+            
+            return {
+                "gtmetrix": gtmetrix_data,
+                "pagespeed": pagespeed_data
+            }
+        except Exception as e:
+            print(f"Erreur analyse technique : {e}")
+            return {}
+
+    async def _analyze_with_gtmetrix(self, url: str) -> Dict[str, Any]:
+        """Analyse avec GTmetrix"""
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Basic {self.gtmetrix_api_key}"
+            }
+            async with session.post(
+                "https://gtmetrix.com/api/2.0/tests",
+                json={"url": url},
+                headers=headers
+            ) as response:
+                return await response.json()
+
+    async def _analyze_with_pagespeed(self, url: str) -> Dict[str, Any]:
+        """Analyse avec PageSpeed Insights"""
+        async with aiohttp.ClientSession() as session:
+            params = {
+                "url": url,
+                "key": self.pagespeed_api_key,
+                "strategy": "mobile"
+            }
+            async with session.get(
+                "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+                params=params
+            ) as response:
+                return await response.json()
+
+    async def _analyze_keywords(self, url: str) -> List[Dict[str, Any]]:
+        """Analyse des mots-clés"""
+        # À implémenter selon vos besoins
+        return []
+
+    async def _analyze_youtube_content(self, url: str) -> Dict[str, Any]:
+        """Analyse du contenu YouTube lié au site"""
+        try:
+            # Recherche de vidéos liées à l'URL
+            search_response = self.youtube.search().list(
+                q=url,
+                part='id,snippet',
+                maxResults=10
+            ).execute()
+
+            video_ids = [item['id']['videoId'] for item in search_response.get('items', []) 
+                        if item['id']['kind'] == 'youtube#video']
+
+            if not video_ids:
+                return {"error": "Aucune vidéo trouvée"}
+
+            # Récupération des statistiques des vidéos
+            videos_response = self.youtube.videos().list(
+                id=','.join(video_ids),
+                part='statistics,snippet'
+            ).execute()
+
+            videos_data = []
+            for video in videos_response.get('items', []):
+                # Analyse des commentaires
+                comments_response = self.youtube.commentThreads().list(
+                    videoId=video['id'],
+                    part='snippet',
+                    maxResults=100
+                ).execute()
+
+                video_data = {
+                    'title': video['snippet']['title'],
+                    'views': int(video['statistics'].get('viewCount', 0)),
+                    'likes': int(video['statistics'].get('likeCount', 0)),
+                    'comments': len(comments_response.get('items', [])),
+                    'engagement_rate': self._calculate_engagement_rate(video['statistics'])
+                }
+                videos_data.append(video_data)
+
+            return {
+                'total_videos': len(videos_data),
+                'videos': videos_data,
+                'average_engagement': sum(v['engagement_rate'] for v in videos_data) / len(videos_data)
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _calculate_engagement_rate(self, statistics: Dict[str, str]) -> float:
+        views = int(statistics.get('viewCount', 0))
+        if views == 0:
+            return 0.0
+        
+        likes = int(statistics.get('likeCount', 0))
+        comments = int(statistics.get('commentCount', 0))
+        
+        return ((likes + comments) / views) * 100
+
+    async def _analyze_competition(self, url: str, keywords: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyse de la concurrence"""
+        try:
+            competitors = []
+            for keyword in keywords:
+                params = {
+                    "engine": "google",
+                    "q": keyword['keyword'],
+                    "api_key": self.serpapi_key
+                }
+                search = GoogleSearch(params)
+                results = search.get_dict()
+                
+                organic_results = results.get('organic_results', [])
+                competitors.extend([
+                    {
+                        'url': result['link'],
+                        'title': result['title'],
+                        'position': idx + 1,
+                        'keyword': keyword['keyword']
+                    }
+                    for idx, result in enumerate(organic_results)
+                    if url not in result['link']
+                ])
+
+            return {
+                'competitors': competitors,
+                'total_competitors': len(competitors),
+                'average_position': sum(c['position'] for c in competitors) / len(competitors) if competitors else 0
+            }
+        except Exception as e:
+            print(f"Erreur analyse concurrence : {e}")
+            return {} 
